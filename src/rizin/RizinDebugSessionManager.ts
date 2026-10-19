@@ -45,6 +45,19 @@ const MAX_COMMAND_FRAMES = 4096;
 const MAX_RECENT_FRAME_BYTES = 16 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 
+/**
+ * Keep at most `limit` UTF-8 bytes of `text`, never splitting a code point.
+ * Byte budgets apply to UTF-8, so a UTF-16 slice would retain several times
+ * the intended size for multibyte text and could cut a surrogate pair.
+ */
+const truncateUtf8Bytes = (text: string, limit: number): string => {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= limit) return text;
+  let end = limit;
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString("utf8");
+};
+
 export const RIZIN_DEBUGGER_PROVIDER_IDENTITY = {
   id: "rizin.debugger",
   name: "Rizin debugger",
@@ -1042,15 +1055,10 @@ export class RizinDebugSessionManager {
       .filter((frame) => frame.length > 0)
       .join("\n");
     const protocolBytes = Buffer.from(protocolOutput, "utf8");
-    let stdoutBytes = Math.min(protocolBytes.length, MAX_DIAGNOSTIC_BYTES);
-    while (
-      stdoutBytes > 0 &&
-      stdoutBytes < protocolBytes.length &&
-      (protocolBytes[stdoutBytes]! & 0xc0) === 0x80
-    )
-      stdoutBytes -= 1;
+    const stdout = truncateUtf8Bytes(protocolOutput, MAX_DIAGNOSTIC_BYTES);
+    const stdoutBytes = Buffer.byteLength(stdout, "utf8");
     return {
-      stdout: protocolBytes.subarray(0, stdoutBytes).toString("utf8"),
+      stdout,
       stderr: output.stderr.text,
       truncated:
         session.historyTruncated ||
@@ -1068,7 +1076,7 @@ export class RizinDebugSessionManager {
   ): void {
     const historyFrame =
       frameBytes > MAX_RECENT_FRAME_BYTES || frame.truncated
-        ? `${frame.text.slice(0, MAX_RECENT_FRAME_BYTES)}[recent frame truncated]`
+        ? `${truncateUtf8Bytes(frame.text, MAX_RECENT_FRAME_BYTES)}[recent frame truncated]`
         : frame.text;
     if (frameBytes > MAX_RECENT_FRAME_BYTES || frame.truncated)
       session.historyTruncated = true;
